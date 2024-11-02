@@ -1,3 +1,4 @@
+
 import cv2
 import numpy as np
 import glob
@@ -66,6 +67,7 @@ def ransac_homography(correspondences, iterations=3000, error_threshold=2, sampl
 
 
 def calculate_warp_bounds(H, width, height):
+    """Calculates the bounding box of the warped image."""
     corners = np.array([[0, width - 1, 0, width - 1],
                        [0, 0, height - 1, height - 1],
                        [1, 1, 1, 1]])
@@ -80,6 +82,7 @@ def calculate_warp_bounds(H, width, height):
 
 
 def warp_image(source, H, target, use_forward=False, offset=(2300, 800)):
+    """Warps the source image onto the destination image."""
 
     h, w, _ = source.shape
     H_inv = np.linalg.inv(H)
@@ -143,6 +146,7 @@ class PyramidBlender:
         return pyramid
 
     def laplacian_pyramid(self, img):
+        """Constructs a Laplacian pyramid."""
 
         pyramid = []
         for _ in range(self.levels - 1):
@@ -155,6 +159,7 @@ class PyramidBlender:
         return pyramid
 
     def blend_pyramids(self, lapA, lapB, mask_pyramid):
+        """Blends two Laplacian pyramids using a mask."""
         blended_pyramid = []
         for i, mask in enumerate(mask_pyramid):
             mask_3ch = cv2.merge((mask, mask, mask)) # Create 3 channel mask
@@ -164,18 +169,21 @@ class PyramidBlender:
 
 
     def reconstruct(self, pyramid):
+        """Reconstructs an image from a Laplacian pyramid."""
         img = pyramid[-1]
         for level in reversed(pyramid[:-1]):
             img = cv2.pyrUp(img, dstsize=level.shape[:2][::-1]).astype(float) + level.astype(float)
         return img
 
     def create_mask(self, img):
+        """Creates a binary mask from an image."""
         mask = np.all(img != 0, axis=2)
         mask_img = np.zeros(img.shape[:2], dtype=float)
         mask_img[mask] = 1.0
         return mask_img
 
     def blend(self, img1, img2):
+        """Blends two images using pyramid blending."""
 
         lap1 = self.laplacian_pyramid(img1)
         lap2 = self.laplacian_pyramid(img2)
@@ -183,6 +191,7 @@ class PyramidBlender:
         mask1 = self.create_mask(img1).astype(bool)
         mask2 = self.create_mask(img2).astype(bool)
     
+        # Handle potential size differences in masks
         if mask1.shape != mask2.shape:
             min_shape = np.minimum(mask1.shape, mask2.shape)
             mask1 = mask1[:min_shape[0], :min_shape[1]]
@@ -208,6 +217,7 @@ class PyramidBlender:
 
 
 class PanaromaStitcher:
+    """Stitches images together to create a panorama."""
 
     def __init__(self, max_features=30, match_ratio=0.75, ransac_err=2.0, 
                  pyr_levels=6, warp_dim=(600, 400), image_offset=(2300, 800)):
@@ -222,30 +232,35 @@ class PanaromaStitcher:
 
 
     def make_panaroma_for_images_in(self, path):
+        """Creates a panorama from images in a directory."""
 
         self.img_files = sorted(glob.glob(os.path.join(path, '*')))
 
         img_count = len(self.img_files)
         print(f"Found {img_count} images for stitching.")
+        
+        
 
         self.scene_id = self._get_scene_id(self.img_files[0])
         output_path = f'outputs/scene{self.scene_id}/custom'
         os.makedirs(output_path, exist_ok=True)
 
+        final_H = np.eye(3)  
+        
 
         if img_count == 6:
-            self._stitch_six()
+            final_H = self._stitch_six()
         elif img_count == 5:
-            self._stitch_five()
+            final_H = self._stitch_five()
         elif img_count == 4:
-            self._stitch_four()
+            final_H = self._stitch_four()
         else:
-            self._stitch_three()
+            final_H = self._stitch_three()
 
 
         final_panorama = self._blend_all()
         cv2.imwrite(os.path.join(output_path, 'blended_image.png'), final_panorama)
-        return final_panorama, None
+        return final_panorama, final_H
     
     
     def _stitch_six(self):
@@ -259,6 +274,7 @@ class PanaromaStitcher:
         H = self._stitch_and_save(2, 3, H)  # 2->3
         H = self._stitch_and_save(3, 4, H)  # 3->4
         H = self._stitch_and_save(4, 5, H)  # 4->5
+        return H
 
     def _stitch_five(self):
         """Stitches a five-image scene."""
@@ -271,7 +287,7 @@ class PanaromaStitcher:
         H = self._stitch_and_save(2, 2, H)
         H = self._stitch_and_save(2, 3, H)
         H = self._stitch_and_save(3, 4, H)
-
+        return H
 
     def _stitch_four(self):
         """Stitches a four-image scene."""
@@ -282,18 +298,22 @@ class PanaromaStitcher:
         H = np.eye(3)
         H = self._stitch_and_save(2, 2, H) # Changed indices
         H = self._stitch_and_save(2, 3, H) # Changed indices
+        return H
 
     def _stitch_three(self):
         """Stitches a three-image scene."""
         H = np.eye(3)
         H = self._stitch_and_save(1, 0, H)
-        H = self._stitch_and_save(1, 1, H) # Reference
+        H = self._stitch_and_save(1, 1, H) # 
+        return H
 
 
 
     def _stitch_and_save(self, src_index, dst_index, prev_H):
+        """Stitches two images and saves the result."""
 
         canvas = np.zeros((3000, 6000, 3), dtype=np.uint8)
+
         src_img = cv2.imread(self.img_files[src_index])
         dst_img = cv2.imread(self.img_files[dst_index])
 
@@ -308,7 +328,6 @@ class PanaromaStitcher:
 
         kp_pairs, src_pts, dst_pts = find_matches(dst_resized, src_resized, max_matches=self.max_features)
 
-
         if len(kp_pairs) < 4:
             print("Error: Not enough matches found.")
             return prev_H
@@ -318,12 +337,17 @@ class PanaromaStitcher:
         if H is None:
             return prev_H
 
-        cumulative_H = np.dot(prev_H, H)
 
-        warp_image(dst_resized, cumulative_H, canvas, offset=self.offset)
+        # Correctly apply cumulative homography ONLY when warping subsequent images
+        if np.array_equal(prev_H, np.eye(3)):  # First image, no previous H
+            warp_image(dst_resized, H, canvas, offset=self.offset)
+            cumulative_H = H # Initialize cumulative_H
+        else:
+            cumulative_H = np.dot(prev_H, H)
+            warp_image(dst_resized, cumulative_H, canvas, offset=self.offset)
 
 
-        output_file = f'outputs/scene{self.scene_id}/custom/warped_{src_index}_{dst_index}.png'
+        output_file = f'outputs/scene{self.scene_id}/custom/warped_{dst_index}.png' # unique filenames
         cv2.imwrite(output_file, canvas)
         return cumulative_H
 
@@ -334,6 +358,9 @@ class PanaromaStitcher:
 
         output_dir = f'outputs/scene{self.scene_id}/custom'
         warped_files = sorted(glob.glob(os.path.join(output_dir, 'warped_*.png')))
+
+        if not warped_files:
+            raise ValueError("No warped images found for blending.")
 
         blender = PyramidBlender(levels=self.pyr_levels)
         final_image = cv2.imread(warped_files[0])
@@ -347,6 +374,7 @@ class PanaromaStitcher:
 
 
     def _get_scene_id(self, file_path):
+        """Extracts the scene ID from the file path."""
         dir_name = os.path.basename(os.path.dirname(file_path))
         scene_id = ''.join(filter(str.isdigit, dir_name))
         return int(scene_id) if scene_id.isdigit() else 1
